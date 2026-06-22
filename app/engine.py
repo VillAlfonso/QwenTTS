@@ -206,6 +206,31 @@ class Engine:
             progress("Designing voice", 1.0)
         return wavs[0], sr
 
+    # ---- single chunk (for the chunk editor) ------------------------------
+    def synth_single(self, mode, text, language, speaker=None, voice_id=None,
+                     instruct=None):
+        """Synthesize ONE chunk (no stitching). Used by the chunk editor."""
+        settings = storage.get_settings()
+        gk = self._gen_kwargs(settings)
+        lang = self._lang(language)
+        if mode == "clone":
+            voice = storage.get_custom_voice(voice_id)
+            if not voice:
+                raise ValueError("Selected voice was not found.")
+            model = self.get_model("base")
+            with _infer_lock:
+                prompt = self._clone_prompt(voice, model)
+                wavs, sr = model.generate_voice_clone(
+                    text=text, language=lang, voice_clone_prompt=prompt,
+                    instruct=(instruct or None), **gk)
+        else:
+            model = self.get_model("custom_voice")
+            with _infer_lock:
+                wavs, sr = model.generate_custom_voice(
+                    text=text, speaker=(speaker or "Ryan"), language=lang,
+                    instruct=(instruct or None), **gk)
+        return wavs[0], sr
+
     # ---- status -----------------------------------------------------------
     def status(self) -> Dict:
         settings = storage.get_settings()

@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css?v=3" />
+<link rel="stylesheet" href="/styles.css?v=6" />
 </head>
 <body>
 
@@ -65,80 +65,80 @@
       <header class="view-head">
         <div>
           <h1>Studio</h1>
-          <p class="sub">Paste your script, pick a voice, and render human-sounding narration.</p>
+          <p class="sub">Write your script, fine-tune each line's tone, then export one file.</p>
         </div>
       </header>
 
-      <div class="studio-grid">
-        <!-- script editor -->
-        <div class="panel editor">
-          <div class="panel-top">
-            <h2>Script</h2>
-            <div class="meta-row" id="scriptMeta"><span>0 words</span><span>0 chars</span><span>~0:00</span></div>
-          </div>
-          <textarea id="scriptInput" class="script" spellcheck="true"
-            placeholder="Write or paste your narration here.&#10;&#10;Long scripts are split into sentences automatically, rendered chunk-by-chunk, and stitched together with natural pauses between paragraphs."></textarea>
-          <div class="chunkbar" id="chunkBar" hidden></div>
+      <!-- global voice controls -->
+      <div class="panel studio-bar">
+        <div class="seg" id="modeSeg">
+          <button class="seg-btn is-active" data-mode="custom">Built-in voice</button>
+          <button class="seg-btn" data-mode="clone">My voices</button>
         </div>
-
-        <!-- voice controls -->
-        <aside class="panel controls">
-          <div class="seg" id="modeSeg">
-            <button class="seg-btn is-active" data-mode="custom">Built-in voice</button>
-            <button class="seg-btn" data-mode="clone">My voices</button>
-          </div>
-
-          <label class="field">
-            <span class="field-label">Voice</span>
-            <select id="voiceSelect" class="select"></select>
-            <small class="field-hint" id="voiceHint"></small>
-          </label>
-
-          <label class="field">
-            <span class="field-label">Language</span>
-            <select id="languageSelect" class="select"></select>
-          </label>
-
-          <label class="field" id="instructField">
-            <span class="field-label">Emotion / style <em class="opt">optional</em></span>
-            <input id="instructInput" class="input" placeholder="e.g. warm and upbeat, like a documentary narrator" />
-            <small class="field-hint">Natural-language delivery control (1.7B model).</small>
-          </label>
-
-          <div class="quick-emotions" id="quickEmotions"></div>
-        </aside>
+        <label class="bar-field">
+          <span>Voice</span>
+          <select id="voiceSelect" class="select"></select>
+        </label>
+        <label class="bar-field">
+          <span>Language</span>
+          <select id="languageSelect" class="select"></select>
+        </label>
+        <div class="bar-hint" id="voiceHint"></div>
       </div>
 
-      <!-- console -->
-      <div class="console" id="console">
-        <button class="btn-generate" id="generateBtn">
-          <span class="bg-label">Generate narration</span>
-        </button>
-
-        <div class="console-mid">
-          <div class="wave" id="wave">
-            <span></span><span></span><span></span><span></span><span></span>
-            <span></span><span></span><span></span><span></span><span></span>
-            <span></span><span></span><span></span><span></span><span></span>
-            <span></span><span></span><span></span><span></span><span></span>
-          </div>
-          <div class="stage-text" id="stageText">Idle · ready to render</div>
+      <!-- script input -->
+      <div class="panel editor" id="scriptPanel">
+        <div class="panel-top">
+          <h2>Script</h2>
+          <div class="meta-row" id="scriptMeta"><span>0 words</span><span>0 chars</span><span>~0:00</span></div>
+        </div>
+        <textarea id="scriptInput" class="script" spellcheck="true"
+          placeholder="Write or paste your full narration here, then split it into lines you can tone-edit one by one."></textarea>
+        <div class="editor-actions">
+          <button class="btn primary" id="splitBtn">Split into lines &rarr;</button>
         </div>
       </div>
 
-      <!-- result -->
-      <div class="result" id="result" hidden>
-        <div class="player">
-          <button class="play-btn" id="playBtn"><svg class="ic-play"><use href="#i-play"/></svg><svg class="ic-pause" hidden><use href="#i-pause"/></svg></button>
-          <div class="player-body">
-            <div class="player-title" id="resultTitle">Render</div>
-            <div class="scrub" id="scrub"><div class="scrub-fill" id="scrubFill"></div></div>
-            <div class="player-meta"><span id="curTime">0:00</span><span id="durTime">0:00</span></div>
-          </div>
-          <div class="dl-group" id="dlGroup"></div>
+      <!-- chunk editor -->
+      <div id="chunkEditor" hidden>
+        <div class="chunk-head">
+          <h2 class="row-title">Lines <span class="muted2" id="chunkCount"></span></h2>
+          <button class="ghost-btn" id="backToScript">&larr; Back to full script</button>
         </div>
-        <audio id="audio" preload="metadata"></audio>
+        <p class="chunk-help">Each line renders separately so you can give it its own tone — type something like <em>sarcastic</em> or <em>excited, fast</em> on any line and re-render just that one. They're stitched into a single file only when you <b>Export</b>.</p>
+
+        <div class="chunk-list" id="chunkList"></div>
+
+        <div class="export-bar">
+          <button class="btn-generate" id="renderAllBtn"><span class="bg-label">Render all lines</span></button>
+          <div class="console-mid">
+            <div class="wave" id="wave">
+              <span></span><span></span><span></span><span></span><span></span>
+              <span></span><span></span><span></span><span></span><span></span>
+              <span></span><span></span><span></span><span></span><span></span>
+              <span></span><span></span><span></span><span></span><span></span>
+            </div>
+            <div class="stage-text" id="stageText">Idle &middot; ready</div>
+          </div>
+          <button class="btn primary big" id="exportBtn">Export file</button>
+        </div>
+
+        <!-- result -->
+        <div class="result" id="result" hidden>
+          <div class="player">
+            <button class="play-btn" id="playBtn"><svg class="ic-play"><use href="#i-play"/></svg><svg class="ic-pause" hidden><use href="#i-pause"/></svg></button>
+            <div class="player-body">
+              <div class="player-title" id="resultTitle">Export</div>
+              <div class="scrub" id="scrub"><div class="scrub-fill" id="scrubFill"></div></div>
+              <div class="player-meta"><span id="curTime">0:00</span><span id="durTime">0:00</span></div>
+            </div>
+            <div class="dl-group" id="dlGroup"></div>
+          </div>
+        </div>
       </div>
+
+      <audio id="audio" preload="metadata"></audio>
+      <audio id="auxAudio" preload="none"></audio>
     </section>
 
     <!-- ============ VOICES ============ -->
@@ -201,6 +201,6 @@
 <!-- ===== toast ===== -->
 <div class="toasts" id="toasts"></div>
 
-<script src="/app.js?v=3"></script>
+<script src="/app.js?v=6"></script>
 </body>
 </html>

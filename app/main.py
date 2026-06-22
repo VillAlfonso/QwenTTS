@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -49,6 +49,30 @@ class DesignReq(BaseModel):
 
 class PreloadReq(BaseModel):
     task: str
+
+
+class ChunkReq(BaseModel):
+    mode: str = "custom"            # "custom" | "clone"
+    text: str
+    language: Optional[str] = None
+    speaker: Optional[str] = None
+    voice_id: Optional[str] = None
+    instruct: Optional[str] = None
+
+
+class ExportChunk(BaseModel):
+    file: str
+    paragraph: int = 0
+    text: Optional[str] = ""
+
+
+class ExportReq(BaseModel):
+    chunks: List[ExportChunk]
+    title: Optional[str] = None
+    voice: Optional[str] = None
+    language: Optional[str] = None
+    format: Optional[str] = None
+    loudnorm: Optional[bool] = None
 
 
 # --- helpers ---------------------------------------------------------------
@@ -138,6 +162,22 @@ def design(req: DesignReq):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"job_id": job_id}
+
+
+@app.post("/api/chunk")
+def chunk(req: ChunkReq):
+    try:
+        return {"job_id": service.submit_chunk(req.model_dump())}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/export")
+def export_render(req: ExportReq):
+    try:
+        return {"job_id": service.submit_export(req.model_dump())}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.post("/api/preload")

@@ -146,6 +146,72 @@ def register_clone(name: str, ref_src_path: str, ref_text: str,
     return voice
 
 
+def submit_chunk(req: Dict) -> str:
+    """Render a single chunk with its own tone (no stitching)."""
+    settings = storage.get_settings()
+    text = (req.get("text") or "").strip()
+    if not text:
+        raise ValueError("Empty chunk text.")
+    mode = req.get("mode", "custom")
+    language = req.get("language") or settings.get("default_language", "Auto")
+    speaker = req.get("speaker") or settings.get("default_speaker", "Ryan")
+    instruct = (req.get("instruct") or "").strip() or None
+    voice_id = req.get("voice_id")
+
+    def task(progress: ProgressFn) -> Dict:
+        progress("Rendering line", 0.1)
+        wav, sr = engine.synth_single(mode, text, language, speaker=speaker,
+                                      voice_id=voice_id, instruct=instruct)
+        progress("Saving", 0.92)
+        name = f"chunk_{storage.new_id()}.wav"
+        audio.save_wav(wav, sr, str(config.OUTPUTS_DIR / name))
+        return {"file": name, "duration": float(len(np.asarray(wav)) / sr), "sr": sr}
+
+    return jobs.submit("chunk", task)
+
+
+def submit_export(req: Dict) -> str:
+    """Stitch already-rendered chunk WAVs into one normalized file."""
+    settings = storage.get_settings()
+    chunks = req.get("chunks") or []
+    if not chunks:
+        raise ValueError("No rendered lines to export yet.")
+    fmt = req.get("format") or settings.get("output_format", "mp3")
+    loudnorm = bool(req.get("loudnorm", settings.get("loudnorm", True)))
+    loudnorm_i = float(settings.get("loudnorm_i", -16.0))
+    title = (req.get("title") or "").strip()
+    voice_label = req.get("voice") or "Mixed"
+    language = req.get("language") or settings.get("default_language", "Auto")
+
+    def task(progress: ProgressFn) -> Dict:
+        segs = []
+        sr = 24000
+        for i, ch in enumerate(chunks):
+            wav, sr = audio.read_wav(str(config.OUTPUTS_DIR / ch["file"]))
+            segs.append({"wav": wav, "paragraph": ch.get("paragraph", 0)})
+            progress("Loading lines", 0.05 + 0.35 * (i + 1) / len(chunks))
+        progress("Stitching & normalizing", 0.5)
+        stitched = audio.stitch(
+            segs, sr, int(settings.get("gap_ms", 180)),
+            int(settings.get("paragraph_gap_ms", 480)),
+            bool(settings.get("trim_silence", True)))
+        out = audio.export(stitched, sr, _basename("export"), loudnorm=loudnorm,
+                           loudnorm_i=loudnorm_i, fmt=fmt)
+        entry = {
+            "id": storage.new_id(), "created": time.time(), "preview": False,
+            "voice": voice_label, "language": language,
+            "chars": sum(len(c.get("text", "")) for c in chunks),
+            "chunks": len(chunks), "duration": out["duration"],
+            "files": out["files"],
+            "text_preview": title or (chunks[0].get("text", "")[:160] if chunks else ""),
+            "mode": "chunked",
+        }
+        storage.add_history(entry)
+        return {"item": entry}
+
+    return jobs.submit("export", task)
+
+
 def submit_preload(task_name: str) -> str:
     def task(progress: ProgressFn) -> Dict:
         progress(f"Downloading / loading {task_name} model", 0.1)

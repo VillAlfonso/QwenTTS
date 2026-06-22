@@ -129,3 +129,10 @@ def prepare_reference(src: str, dst: str, max_seconds: int = 60) -> None:
 def save_wav(wav: np.ndarray, sr: int, path: str) -> None:
     sf.write(str(path), np.asarray(wav, dtype=np.float32).reshape(-1), sr,
              subtype="PCM_16")
+
+
+def read_wav(path: str):
+    wav, sr = sf.read(str(path), dtype="float32", always_2d=False)
+    if wav.ndim > 1:
+        wav = np.mean(wav, axis=-1).astype(np.float32)
+    return wav, int(sr)

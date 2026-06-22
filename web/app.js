@@ -13,6 +13,7 @@ const state = {
   settings: {}, status: {}, history: [],
   voices: { builtin: [], custom: [], languages: [], design_presets: [] },
   resultItem: null,
+  chunks: [],
 };
 
 const QUICK_EMOTIONS = [
@@ -94,10 +95,10 @@ function renderChips(){
 const scriptInput = $("#scriptInput");
 const voiceSelect = $("#voiceSelect");
 const languageSelect = $("#languageSelect");
-const instructInput = $("#instructInput");
-const generateBtn = $("#generateBtn");
 const wave = $("#wave");
 const stageText = $("#stageText");
+
+const TONE_CHIPS = ["sarcastic","excited","calm","sad","angry","whispering","cheerful","serious","suspenseful","sincere"];
 
 function populateLanguages(){
   languageSelect.innerHTML = state.voices.languages
@@ -119,7 +120,6 @@ function populateVoices(){
     }
   }
   updateVoiceHint();
-  updateInstructVisibility();
 }
 function updateVoiceHint(){
   const hint = $("#voiceHint");
@@ -128,32 +128,10 @@ function updateVoiceHint(){
     hint.textContent = v ? v.desc : "";
   } else {
     const v = state.voices.custom.find(x => x.id === voiceSelect.value);
-    hint.textContent = v ? (v.type === "design" ? `Designed: ${v.instruct?.slice(0,80) || ""}` : "Cloned voice") : "";
+    hint.textContent = v ? "Your voice — per-line tone works but is subtler than built-in voices" : "";
   }
 }
-function updateInstructVisibility(){
-  // emotion/style only applies to built-in voices on the 1.7B model
-  const is17 = (state.settings.model_size || "1.7B") === "1.7B";
-  const show = state.mode === "custom";
-  $("#instructField").style.display = show ? "" : "none";
-  $("#quickEmotions").style.display = show ? "" : "none";
-  if(show){
-    const hint = $("#instructField .field-hint");
-    hint.textContent = is17 ? "Natural-language delivery control (1.7B model)."
-      : "Switch to the 1.7B model in Settings to enable emotion control.";
-    instructInput.disabled = !is17;
-  }
-}
-
-function renderQuickEmotions(){
-  const box = $("#quickEmotions");
-  box.innerHTML = "";
-  QUICK_EMOTIONS.forEach(e => {
-    const c = el("button", "emo-chip", e);
-    c.onclick = () => { instructInput.value = e; };
-    box.appendChild(c);
-  });
-}
+function renderQuickEmotions(){ /* tones are per-line now */ }
 
 function updateScriptMeta(){
   const text = scriptInput.value;
@@ -161,61 +139,162 @@ function updateScriptMeta(){
   const chars = text.replace(/\s/g, "").length;
   const est = words / 150 * 60; // ~150 wpm narration
   $("#scriptMeta").innerHTML = `<span>${words} words</span><span>${chars} chars</span><span>~${fmtDur(est)}</span>`;
-  const bar = $("#chunkBar");
-  if(!text.trim()){ bar.hidden = true; return; }
-  const chunks = previewChunks(text, state.settings.max_chars || 240);
-  bar.hidden = false;
-  const shown = chunks.slice(0, 14);
-  bar.innerHTML = `<span class="chunk-pill" style="border-color:rgba(230,169,75,.3);color:var(--accent)">${chunks.length} chunk${chunks.length>1?"s":""}</span>`
-    + shown.map(c => `<span class="chunk-pill" title="${c.replace(/"/g,"&quot;")}">${c.slice(0,22)}${c.length>22?"…":""}</span>`).join("")
-    + (chunks.length > shown.length ? `<span class="chunk-pill">+${chunks.length - shown.length} more</span>` : "");
 }
 
-/* ----- generation ----- */
-let running = false;
-function setRunning(on, msg, isErr){
-  running = on;
-  generateBtn.disabled = on;
-  wave.classList.toggle("is-active", on);
-  $(".bg-label").textContent = on ? "Rendering…" : "Generate narration";
-  stageText.textContent = msg || (on ? "Working…" : "Idle · ready to render");
-  stageText.className = "stage-text" + (on ? " run" : "") + (isErr ? " err" : "");
-}
-function setStage(j){
-  const pct = Math.round((j.progress || 0) * 100);
-  stageText.textContent = `${j.stage || "Working"} · ${pct}%`;
+/* ----- chunk model ----- */
+// One sentence per line, so each can carry its own tone. Paragraph index is
+// kept so the export stage can add a longer pause between paragraphs.
+function chunkScript(text){
+  const out = [];
+  text.replace(/\r\n?/g, "\n").split(/\n\s*\n+/).forEach((para, pi) => {
+    const p = para.replace(/\s+/g, " ").trim();
+    if(!p) return;
+    const sents = p.match(/[^.!?。！？…]+[.!?。！？…]*(?:\s+|$)/g) || [p];
+    sents.forEach(s => { s = s.trim(); if(s) out.push({ text: s, paragraph: pi }); });
+  });
+  return out;
 }
 
-async function generate(){
-  if(running) return;
+$("#splitBtn").addEventListener("click", () => {
   const text = scriptInput.value.trim();
   if(!text){ toast("Write or paste a script first.", "err"); scriptInput.focus(); return; }
-  const body = { mode: state.mode, text, language: languageSelect.value };
-  if(state.mode === "custom"){
-    body.speaker = voiceSelect.value;
-    body.instruct = instructInput.value.trim() || null;
-  } else {
-    if(!voiceSelect.value){ toast("Create or pick a custom voice first.", "err"); return; }
+  const parts = chunkScript(text);
+  state.chunks = parts.map((c, i) => ({ id: "c" + Date.now() + "_" + i, text: c.text, instruct: "", paragraph: c.paragraph, status: "empty", file: null, duration: 0 }));
+  $("#scriptPanel").hidden = true;
+  $("#chunkEditor").hidden = false;
+  $("#result").hidden = true;
+  renderChunkList();
+  setStageText("Idle · render the lines when you're ready");
+});
+$("#backToScript").addEventListener("click", () => {
+  $("#chunkEditor").hidden = true;
+  $("#scriptPanel").hidden = false;
+});
+
+function renderChunkList(){
+  const list = $("#chunkList"); list.innerHTML = "";
+  $("#chunkCount").textContent = "· " + state.chunks.length;
+  state.chunks.forEach((ch, i) => list.appendChild(chunkCard(ch, i)));
+}
+function chunkCard(ch, idx){
+  const card = el("div", "chunk-card");
+  card.dataset.idx = idx;
+  card.innerHTML = `
+    <div class="chunk-gutter">
+      <span class="chunk-num">${idx+1}</span>
+      <button class="chunk-play" title="Play this line">${icon("i-play")}</button>
+      <span class="chunk-dot"></span>
+    </div>
+    <div class="chunk-main">
+      <textarea class="chunk-text" rows="1"></textarea>
+      <div class="chunk-tone-row">
+        <input class="chunk-tone" placeholder="tone for this line (optional) — e.g. sarcastic, excited, whispering" />
+        <button class="chunk-render mini-btn">${icon("i-play")}<span>Render</span></button>
+      </div>
+      <div class="chunk-chips"></div>
+    </div>`;
+  const ta = $(".chunk-text", card); ta.value = ch.text;
+  const tone = $(".chunk-tone", card); tone.value = ch.instruct || "";
+  const autosize = () => { ta.style.height = "auto"; ta.style.height = (ta.scrollHeight + 2) + "px"; };
+  requestAnimationFrame(autosize);
+  ta.addEventListener("input", () => { ch.text = ta.value; markStale(ch, card); autosize(); });
+  tone.addEventListener("input", () => { ch.instruct = tone.value; markStale(ch, card); });
+  const chips = $(".chunk-chips", card);
+  TONE_CHIPS.forEach(t => {
+    const c = el("button", "emo-chip", t);
+    c.onclick = () => { tone.value = tone.value.trim() ? tone.value.trim() + ", " + t : t; ch.instruct = tone.value; markStale(ch, card); };
+    chips.appendChild(c);
+  });
+  $(".chunk-play", card).onclick = () => { if(ch.file) playAux("/audio/" + ch.file); };
+  $(".chunk-render", card).onclick = () => renderChunk(idx);
+  updateCardStatus(card, ch);
+  return card;
+}
+function markStale(ch, card){ if(ch.status === "done"){ ch.status = "stale"; updateCardStatus(card, ch); } }
+function updateCardStatus(card, ch){
+  $(".chunk-dot", card).className = "chunk-dot " + ch.status;
+  $(".chunk-play", card).disabled = !ch.file;
+  card.classList.toggle("is-rendering", ch.status === "rendering");
+  const lbl = $(".chunk-render span", card);
+  if(lbl) lbl.textContent = (ch.status === "done" || ch.status === "stale") ? "Re-render" : "Render";
+}
+
+async function renderChunk(idx){
+  const ch = state.chunks[idx];
+  if(!ch || !ch.text.trim()) return;
+  const card = $(`.chunk-card[data-idx="${idx}"]`);
+  const body = { mode: state.mode, text: ch.text, language: languageSelect.value, instruct: ch.instruct || null };
+  if(state.mode === "custom"){ body.speaker = voiceSelect.value; }
+  else {
+    if(!voiceSelect.value){ toast("Pick a custom voice first (create one in Voices).", "err"); return; }
     body.voice_id = voiceSelect.value;
   }
-  setRunning(true, "Queued…");
+  ch.status = "rendering"; if(card) updateCardStatus(card, ch);
   try {
-    const { job_id } = await api.post("/api/tts", body);
-    const res = await pollJob(job_id, setStage);
-    const item = res.item;
-    state.history.unshift(item);
-    showResult(item);
-    setRunning(false, `Done · ${fmtDur(item.duration)} of audio`);
-    toast("Narration ready.", "ok");
-  } catch(e){
-    setRunning(false, "Error: " + e.message, true);
-    toast(e.message, "err");
-  }
+    const { job_id } = await api.post("/api/chunk", body);
+    const res = await pollJob(job_id);
+    ch.file = res.file; ch.duration = res.duration; ch.status = "done";
+    if(card) updateCardStatus(card, ch);
+  } catch(e){ ch.status = "error"; if(card) updateCardStatus(card, ch); toast(e.message, "err"); throw e; }
 }
-generateBtn.addEventListener("click", generate);
+
+/* ----- batch render + export ----- */
+let running = false;
+function setStageText(msg, cls){ stageText.textContent = msg; stageText.className = "stage-text" + (cls ? " " + cls : ""); }
+function setRunning(on, msg, isErr){
+  running = on;
+  $("#renderAllBtn").disabled = on; $("#exportBtn").disabled = on;
+  wave.classList.toggle("is-active", on);
+  $(".bg-label").textContent = on ? "Working…" : "Render all lines";
+  setStageText(msg || (on ? "Working…" : "Idle · ready"), isErr ? "err" : (on ? "run" : ""));
+}
+function setStage(j){ setStageText(`${j.stage || "Working"} · ${Math.round((j.progress||0)*100)}%`, "run"); }
+
+async function renderAll(){
+  if(running) return;
+  const todo = state.chunks.map((c, i) => i).filter(i => state.chunks[i].status !== "done");
+  if(!todo.length){ toast("All lines are already rendered.", "ok"); return; }
+  setRunning(true, "Rendering lines…");
+  let done = 0;
+  try {
+    for(const i of todo){
+      setStageText(`Rendering line ${done+1} of ${todo.length}…`, "run");
+      await renderChunk(i);
+      done++;
+    }
+    setRunning(false, "All lines ready · press Export to stitch them");
+    toast("All lines rendered.", "ok");
+  } catch(e){ setRunning(false, "Stopped: " + e.message, true); }
+}
+$("#renderAllBtn").addEventListener("click", renderAll);
+
+async function exportAll(){
+  if(running) return;
+  const done = state.chunks.filter(c => c.status === "done" && c.file);
+  if(!done.length){ toast("Render some lines first.", "err"); return; }
+  const missing = state.chunks.length - done.length;
+  if(missing > 0 && !confirm(`${missing} line(s) aren't rendered yet. Export the ${done.length} rendered line(s) anyway?`)) return;
+  setRunning(true, "Exporting…");
+  const voice = state.mode === "custom" ? dispName(voiceSelect.value)
+    : (state.voices.custom.find(v => v.id === voiceSelect.value)?.name || "Cloned voice");
+  const chunks = done.map(c => ({ file: c.file, paragraph: c.paragraph, text: c.text }));
+  try {
+    const { job_id } = await api.post("/api/export", { chunks, voice, language: languageSelect.value, title: done[0].text.slice(0, 90) });
+    const res = await pollJob(job_id, setStage);
+    state.history.unshift(res.item);
+    showResult(res.item);
+    setRunning(false, `Exported · ${fmtDur(res.item.duration)}`);
+    toast("Exported — saved to History.", "ok");
+  } catch(e){ setRunning(false, "Export failed: " + e.message, true); toast(e.message, "err"); }
+}
+$("#exportBtn").addEventListener("click", exportAll);
 
 /* ----- result player ----- */
 const audio = $("#audio");
+const auxAudio = $("#auxAudio");
+// Previews and history play through a separate channel so they never hijack
+// the main result player's audio source.
+function playAux(url){ try { audio.pause(); } catch(e){} auxAudio.src = url; auxAudio.play().catch(()=>{}); }
 function showResult(item){
   state.resultItem = item;
   const file = item.files.mp3 || item.files.wav;
@@ -238,7 +317,7 @@ function setSource(url, asResult){
   audio.play().catch(()=>{});
 }
 const playBtn = $("#playBtn");
-playBtn.addEventListener("click", () => { if(audio.paused) audio.play(); else audio.pause(); });
+playBtn.addEventListener("click", () => { if(audio.paused){ try { auxAudio.pause(); } catch(e){} audio.play(); } else audio.pause(); });
 function syncPlayIcon(){
   const playing = !audio.paused && !audio.ended;
   $(".ic-play", playBtn).hidden = playing;
@@ -260,14 +339,19 @@ $("#scrub").addEventListener("click", e => {
   audio.currentTime = (e.clientX - r.left) / r.width * audio.duration;
 });
 
-/* mode toggle */
+/* mode + voice changes invalidate already-rendered lines (different voice) */
+function markAllStale(){
+  (state.chunks || []).forEach(ch => { if(ch.status === "done") ch.status = "stale"; });
+  if(!$("#chunkEditor").hidden) renderChunkList();
+}
 $("#modeSeg").addEventListener("click", e => {
   const b = e.target.closest(".seg-btn"); if(!b) return;
   state.mode = b.dataset.mode;
   $$("#modeSeg .seg-btn").forEach(x => x.classList.toggle("is-active", x === b));
-  populateVoices();
+  populateVoices(); markAllStale();
 });
-voiceSelect.addEventListener("change", updateVoiceHint);
+voiceSelect.addEventListener("change", () => { updateVoiceHint(); markAllStale(); });
+languageSelect.addEventListener("change", markAllStale);
 scriptInput.addEventListener("input", updateScriptMeta);
 
 /* ============================================================
@@ -324,25 +408,33 @@ async function previewVoice(speaker, voiceId, btn){
   const body = { preview: true, language: languageSelect.value || "English" };
   if(speaker){ body.mode = "custom"; body.speaker = speaker; body.text = ""; }
   else { body.mode = "clone"; body.voice_id = voiceId; body.text = ""; }
-  // server fills preview text when empty? no — send a real line
-  body.text = previewLine(body.language);
+  body.text = previewSampleText(body.language);
   try {
     const { job_id } = await api.post("/api/tts", body);
     const res = await pollJob(job_id);
     const file = res.item.files.mp3 || res.item.files.wav;
-    setSource("/audio/" + file, false);
+    playAux("/audio/" + file);
   } catch(e){ toast(e.message, "err"); }
   finally { if(btn) btn.classList.remove("loading"); }
 }
+function previewSampleText(lang){
+  // Prefer a snippet of the user's own script so previews reflect their content.
+  const s = (scriptInput.value || "").trim();
+  if(s){
+    const m = s.match(/^[\s\S]{1,180}?[.!?。！？…](\s|$)/);
+    return (m ? m[0] : s.slice(0, 160)).trim();
+  }
+  return previewLine(lang);
+}
 function previewLine(lang){
   const m = {
-    English:"Hey everyone, welcome back to the channel. Let's get straight into it.",
-    Chinese:"大家好，欢迎回到我的频道，我们马上开始吧。",
-    Japanese:"皆さん、こんにちは。チャンネルへようこそ。",
-    Korean:"여러분 안녕하세요, 채널에 오신 것을 환영합니다.",
-    German:"Hallo zusammen und willkommen zurück auf dem Kanal.",
-    French:"Salut tout le monde, bienvenue sur la chaîne.",
-    Spanish:"Hola a todos, bienvenidos de nuevo al canal.",
+    English:"This is a short sample of how this voice sounds.",
+    Chinese:"这是这个声音的简短示例。",
+    Japanese:"これはこの声の短いサンプルです。",
+    Korean:"이 목소리가 어떻게 들리는지 들려주는 짧은 샘플입니다.",
+    German:"Dies ist eine kurze Hörprobe dieser Stimme.",
+    French:"Voici un court échantillon de cette voix.",
+    Spanish:"Esta es una breve muestra de cómo suena esta voz.",
   };
   return m[lang] || m.English;
 }
@@ -440,7 +532,7 @@ function renderHistory(){
         <div class="h-meta"><span>${item.voice}</span><span>${fmtDur(item.duration)}</span><span>${item.chars} chars</span><span>${when}</span></div>
       </div>
       <div class="h-actions"></div>`;
-    $(".h-play", row).onclick = () => { if(file) setSource("/audio/" + file, false); };
+    $(".h-play", row).onclick = () => { if(file) playAux("/audio/" + file); };
     const acts = $(".h-actions", row);
     Object.entries(item.files || {}).forEach(([kind, name]) => {
       const a = el("a", "icon-btn", icon("i-download")); a.href = "/download/" + name; a.title = "Download " + kind.toUpperCase();
