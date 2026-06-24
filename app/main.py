@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, jobs, service, storage
+from . import config, humanize, jobs, service, storage
 from .audio import ffmpeg_ok
 from .engine import engine
 from .voices import DESIGN_PRESETS, LANGUAGES, SPEAKERS
@@ -73,6 +73,13 @@ class ExportReq(BaseModel):
     language: Optional[str] = None
     format: Optional[str] = None
     loudnorm: Optional[bool] = None
+
+
+class HumanizeReq(BaseModel):
+    source: str                       # a filename in data/outputs
+    params: Optional[dict] = None
+    voice: Optional[str] = None
+    language: Optional[str] = None
 
 
 # --- helpers ---------------------------------------------------------------
@@ -178,6 +185,41 @@ def export_render(req: ExportReq):
         return {"job_id": service.submit_export(req.model_dump())}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/humanize/presets")
+def humanize_presets():
+    return {
+        "defaults": humanize.DEFAULTS,
+        "presets": humanize.PRESETS,
+        "ambiance_types": humanize.AMBIANCE_TYPES,
+    }
+
+
+@app.post("/api/humanize")
+def humanize_audio(req: HumanizeReq):
+    try:
+        return {"job_id": service.submit_humanize(req.model_dump())}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/humanize/ambiance")
+async def upload_ambiance(file: UploadFile = File(...)):
+    suffix = Path(file.filename or "amb.wav").suffix or ".wav"
+    tmp = config.DATA_DIR / "ambiance" / f"upload_{storage.new_id()}{suffix}"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_bytes(await file.read())
+    try:
+        name = service.store_ambiance(str(tmp), file.filename or "ambiance")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Could not process ambiance: {exc}")
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+    return {"file": name, "name": (file.filename or "Custom")}
 
 
 @app.post("/api/preload")

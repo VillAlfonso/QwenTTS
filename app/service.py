@@ -7,7 +7,7 @@ from typing import Callable, Dict
 
 import numpy as np
 
-from . import audio, config, jobs, storage
+from . import audio, config, humanize, jobs, storage
 from .chunking import chunk_text, count_chars
 from .engine import engine
 from .voices import display_name, preview_text
@@ -210,6 +210,40 @@ def submit_export(req: Dict) -> str:
         return {"item": entry}
 
     return jobs.submit("export", task)
+
+
+def submit_humanize(req: Dict) -> str:
+    """Run the de-AI humanizer on an already-rendered output file."""
+    source = (req.get("source") or "").strip()
+    if not source or "/" in source or "\\" in source or ".." in source:
+        raise ValueError("Pick a valid source clip.")
+    src_path = config.OUTPUTS_DIR / source
+    if not src_path.exists():
+        raise ValueError("Source audio not found.")
+    params = req.get("params") or {}
+    label = (req.get("voice") or "Narration").strip()
+
+    def task(progress: ProgressFn) -> Dict:
+        out = humanize.process(str(src_path), params, _basename("polished"), progress)
+        entry = {
+            "id": storage.new_id(), "created": time.time(), "preview": False,
+            "voice": f"{label} · polished", "language": req.get("language") or "",
+            "chars": 0, "chunks": 0, "duration": out["duration"], "files": out["files"],
+            "text_preview": "AI-fingerprints removed", "mode": "humanized",
+            "humanized": True, "source": source,
+        }
+        storage.add_history(entry)
+        return {"item": entry}
+
+    return jobs.submit("humanize", task)
+
+
+def store_ambiance(src_path: str, filename: str) -> str:
+    """Convert an uploaded ambiance bed to mono 24k WAV; return its stored name."""
+    name = f"amb_{storage.new_id()}.wav"
+    dst = humanize.AMB_DIR / name
+    audio.prepare_reference(str(src_path), str(dst), max_seconds=600)
+    return name
 
 
 def submit_preload(task_name: str) -> str:

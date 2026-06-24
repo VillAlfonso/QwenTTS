@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css?v=6" />
+<link rel="stylesheet" href="/styles.css?v=7" />
 </head>
 <body>
 
@@ -47,6 +47,7 @@
       <button class="nav-item is-active" data-view="studio"><svg><use href="#i-studio"/></svg><span>Studio</span></button>
       <button class="nav-item" data-view="voices"><svg><use href="#i-mic"/></svg><span>Voices</span></button>
       <button class="nav-item" data-view="history"><svg><use href="#i-clock"/></svg><span>History</span></button>
+      <button class="nav-item" data-view="humanize"><svg><use href="#i-spark"/></svg><span>Polish</span></button>
       <button class="nav-item" data-view="settings"><svg><use href="#i-sliders"/></svg><span>Settings</span></button>
     </nav>
 
@@ -180,6 +181,62 @@
       <div class="empty" id="historyEmpty" hidden>No renders yet — your generated narration will appear here.</div>
     </section>
 
+    <!-- ============ POLISH / DE-AI ============ -->
+    <section class="view" data-view="humanize">
+      <header class="view-head">
+        <div>
+          <h1>Polish <span class="title-tag">remove AI fingerprints</span></h1>
+          <p class="sub">Subtle analog imperfections that defeat AI-voice detectors while keeping your narration clean and clear.</p>
+        </div>
+      </header>
+
+      <div class="panel hz-source-panel">
+        <div class="hz-source-row">
+          <label class="bar-field"><span>Source clip</span>
+            <select id="hzSource" class="select"></select>
+          </label>
+          <a class="dl-btn" id="hzBeforeDl" href="#" download><svg><use href="#i-download"/></svg><span>Original</span></a>
+        </div>
+        <audio id="hzBefore" class="hz-audio" controls preload="none"></audio>
+        <div class="empty" id="hzNoSource" hidden>Export a narration in the Studio first — then polish it here.</div>
+      </div>
+
+      <div class="hz-presets">
+        <span class="hz-presets-label">Preset</span>
+        <div class="seg small" id="hzPresetSeg">
+          <button class="seg-btn is-active" data-preset="minimal">Minimal</button>
+          <button class="seg-btn" data-preset="balanced">Balanced</button>
+          <button class="seg-btn" data-preset="heavy">Heavy</button>
+        </div>
+        <span class="hz-presets-hint">Minimal is recommended — Qwen already sounds human.</span>
+      </div>
+
+      <div class="hz-grid" id="hzControls"></div>
+
+      <div class="export-bar">
+        <button class="btn-generate" id="hzProcessBtn"><span class="bg-label">Remove AI fingerprints</span></button>
+        <div class="console-mid">
+          <div class="wave" id="hzWave">
+            <span></span><span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+          <div class="stage-text" id="hzStage">Idle &middot; pick a source and process</div>
+        </div>
+      </div>
+
+      <div class="result" id="hzResult" hidden>
+        <div class="player hz-after-player">
+          <div class="player-body">
+            <div class="player-title">Polished &middot; AI fingerprints removed</div>
+            <audio id="hzAfter" class="hz-audio" controls preload="none"></audio>
+          </div>
+          <div class="dl-group" id="hzDl"></div>
+        </div>
+      </div>
+    </section>
+
     <!-- ============ SETTINGS ============ -->
     <section class="view" data-view="settings">
       <header class="view-head">
@@ -201,6 +258,6 @@
 <!-- ===== toast ===== -->
 <div class="toasts" id="toasts"></div>
 
-<script src="/app.js?v=6"></script>
+<script src="/app.js?v=7"></script>
 </body>
 </html>

@@ -78,6 +78,7 @@ function showView(name){
   if(name === "voices") renderVoices();
   if(name === "history") renderHistory();
   if(name === "settings") renderSettings();
+  if(name === "humanize") renderHumanize();
 }
 $("#nav").addEventListener("click", e => { const b = e.target.closest(".nav-item"); if(b) showView(b.dataset.view); });
 
@@ -308,6 +309,9 @@ function showResult(item){
     a.href = "/download/" + name; a.download = "";
     dl.appendChild(a);
   });
+  const hz = el("button", "dl-btn hz-jump", `${icon("i-spark")}<span>Remove AI fingerprints</span>`);
+  hz.onclick = () => openHumanize(item);
+  dl.appendChild(hz);
   $("#result").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 let resultIsSource = false;
@@ -641,6 +645,204 @@ async function downloadModel(task, btn){
   } catch(e){ toast(e.message, "err"); btn.disabled = false; btn.textContent = "Download"; }
 }
 async function refreshStatus(){ try { state.status = await api.get("/api/status"); renderChips(); } catch{} }
+
+/* ============================================================
+   POLISH / DE-AI HUMANIZER
+   ============================================================ */
+const HZ_SCHEMA = [
+  {key:"eq", title:"Tone — de-crisp & warmth", desc:"Roll off the digital high-end, add low-mid vocal warmth.", controls:[
+    {key:"high_gain", label:"High roll-off", min:-10, max:0, step:0.5, unit:"dB"},
+    {key:"high_freq", label:"Roll-off above", min:6000, max:14000, step:500, unit:"Hz"},
+    {key:"warmth_gain", label:"Warmth (200–500 Hz)", min:0, max:6, step:0.5, unit:"dB"},
+  ]},
+  {key:"saturation", title:"Tube saturation", desc:"Gentle harmonic grit, like a real microphone.", controls:[
+    {key:"amount", label:"Drive", min:0, max:50, step:1, unit:"%"},
+  ]},
+  {key:"wow", title:"Tape wow & flutter", desc:"Slow micro pitch drift that digital audio never has.", controls:[
+    {key:"amount", label:"Depth", min:0, max:80, step:1, unit:"%"},
+  ]},
+  {key:"tempo_jitter", title:"Break AI pacing", desc:"Tiny timing changes so the rhythm isn't mathematically perfect.", controls:[
+    {key:"amount", label:"Timing variation", min:0, max:4, step:0.1, unit:"%"},
+    {key:"segments", label:"Sections", min:2, max:20, step:1, unit:""},
+  ]},
+  {key:"ambiance", title:"Background ambiance", desc:"Quiet room tone so the gaps are never true digital silence.", ambiance:true, controls:[
+    {key:"level_db", label:"Level", min:-50, max:-12, step:1, unit:"dB"},
+  ]},
+  {key:"output", title:"Export", desc:"Downsampling + MP3 blends the frequency profile.", noToggle:true, controls:[
+    {key:"sample_rate", label:"Sample rate", type:"select", options:[[32000,"32 kHz"],[44100,"44.1 kHz"],[48000,"48 kHz"]]},
+    {key:"bitrate", label:"MP3 bitrate", type:"select", options:[[128,"128 kbps"],[160,"160 kbps"],[192,"192 kbps"]]},
+  ]},
+];
+
+function hzDeepMerge(a, b){
+  const o = structuredClone(a);
+  for(const k in (b||{})){
+    o[k] = (b[k] && typeof b[k] === "object" && !Array.isArray(b[k])) ? hzDeepMerge(o[k]||{}, b[k]) : b[k];
+  }
+  return o;
+}
+async function ensureHzLoaded(){
+  if(state.hzData) return;
+  state.hzData = await api.get("/api/humanize/presets");
+  state.hzAmbiance = [];
+  $$("#hzWave span").forEach((s, i) => s.style.setProperty("--i", i));
+  applyHzPreset("minimal", true);
+}
+function applyHzPreset(name, skipRender){
+  state.hz = hzDeepMerge(state.hzData.defaults, state.hzData.presets[name] || {});
+  $$("#hzPresetSeg .seg-btn").forEach(b => b.classList.toggle("is-active", b.dataset.preset === name));
+  if(!skipRender) renderHzControls();
+}
+async function renderHumanize(){
+  try { await ensureHzLoaded(); }
+  catch(e){ toast("Could not load polish settings: " + e.message, "err"); return; }
+  populateHzSource();
+  renderHzControls();
+}
+function populateHzSource(){
+  const sel = $("#hzSource"), noSrc = $("#hzNoSource"), before = $("#hzBefore");
+  const items = state.history.filter(h => !h.preview && h.files && (h.files.mp3 || h.files.wav) && !h.humanized);
+  if(!items.length){
+    sel.innerHTML = `<option value="">No exported clips yet</option>`;
+    noSrc.hidden = false; before.hidden = true; state.hzSource = null; return;
+  }
+  noSrc.hidden = true; before.hidden = false;
+  sel.innerHTML = items.map(h => {
+    const f = h.files.mp3 || h.files.wav;
+    return `<option value="${f}">${h.voice || "Narration"} · ${fmtDur(h.duration)}${h.text_preview ? " · " + h.text_preview.slice(0,38) : ""}</option>`;
+  }).join("");
+  const want = state.pendingSource && items.find(h => (h.files.mp3 || h.files.wav) === state.pendingSource);
+  state.hzSource = want ? state.pendingSource : (items[0].files.mp3 || items[0].files.wav);
+  sel.value = state.hzSource;
+  setHzBefore();
+  state.pendingSource = null;
+}
+function setHzBefore(){
+  if(!state.hzSource) return;
+  $("#hzBefore").src = "/audio/" + state.hzSource;
+  $("#hzBeforeDl").href = "/download/" + state.hzSource;
+}
+function renderHzControls(){
+  const grid = $("#hzControls"); grid.innerHTML = "";
+  HZ_SCHEMA.forEach(g => grid.appendChild(hzCard(g)));
+}
+function hzCard(g){
+  const group = state.hz[g.key];
+  const enabled = g.noToggle ? true : (group.enabled !== false);
+  const card = el("div", "hz-card" + (enabled ? "" : " is-off"));
+  card.innerHTML = `<div class="hz-card-head"><div><h3>${g.title}</h3><small>${g.desc}</small></div></div><div class="hz-card-body"></div>`;
+  if(!g.noToggle){
+    const tg = el("button", "toggle" + (enabled ? " on" : ""));
+    tg.onclick = () => { group.enabled = !enabled; renderHzControls(); };
+    $(".hz-card-head", card).appendChild(tg);
+  }
+  const body = $(".hz-card-body", card);
+  g.controls.forEach(c => body.appendChild(hzControl(g, c, enabled)));
+  if(g.ambiance) body.appendChild(hzAmbianceExtra(enabled));
+  return card;
+}
+function hzControl(g, c, enabled){
+  const group = state.hz[g.key];
+  const wrap = el("div", "hz-ctl");
+  if(c.type === "select"){
+    wrap.innerHTML = `<div class="hz-ctl-top"><label>${c.label}</label></div>`;
+    const sel = el("select", "select");
+    sel.innerHTML = c.options.map(([v,t]) => `<option value="${v}" ${String(group[c.key])===String(v)?"selected":""}>${t}</option>`).join("");
+    sel.disabled = !enabled;
+    sel.onchange = () => { group[c.key] = isNaN(+sel.value) ? sel.value : +sel.value; };
+    wrap.appendChild(sel);
+  } else {
+    const val = group[c.key];
+    const fmt = v => `${(+v).toFixed(c.step < 1 ? 1 : 0)}${c.unit ? " " + c.unit : ""}`;
+    wrap.innerHTML = `<div class="hz-ctl-top"><label>${c.label}</label><span class="hz-val">${fmt(val)}</span></div>`;
+    const inp = el("input"); inp.type = "range"; inp.min = c.min; inp.max = c.max; inp.step = c.step; inp.value = val; inp.disabled = !enabled;
+    const out = $(".hz-val", wrap);
+    inp.oninput = () => { group[c.key] = +inp.value; out.textContent = fmt(inp.value); };
+    wrap.appendChild(inp);
+  }
+  return wrap;
+}
+function hzAmbianceExtra(enabled){
+  const group = state.hz.ambiance;
+  const wrap = el("div", "hz-ctl");
+  wrap.innerHTML = `<div class="hz-ctl-top"><label>Type</label></div>`;
+  const row = el("div", "hz-amb-row");
+  const sel = el("select", "select"); sel.disabled = !enabled;
+  const types = state.hzData.ambiance_types.map(t => ["" + t, t[0].toUpperCase() + t.slice(1)]);
+  const customs = (state.hzAmbiance || []).map(a => ["file:" + a.file, a.name + " (yours)"]);
+  const cur = group.file ? "file:" + group.file : (group.type || "room");
+  sel.innerHTML = [...types, ...customs].map(([v,t]) => `<option value="${v}" ${v===cur?"selected":""}>${t}</option>`).join("");
+  sel.onchange = () => {
+    const v = sel.value;
+    if(v.startsWith("file:")){ group.file = v.slice(5); group.type = "custom"; }
+    else { group.file = null; group.type = v; }
+  };
+  const up = el("button", "mini-btn"); up.innerHTML = `${icon("i-upload")}<span>Upload bed</span>`; up.disabled = !enabled;
+  up.onclick = hzUploadAmbiance;
+  row.appendChild(sel); row.appendChild(up);
+  wrap.appendChild(row);
+  return wrap;
+}
+function hzUploadAmbiance(){
+  const inp = el("input"); inp.type = "file"; inp.accept = "audio/*";
+  inp.onchange = async () => {
+    const f = inp.files[0]; if(!f) return;
+    const fd = new FormData(); fd.append("file", f);
+    try {
+      const r = await api.form("/api/humanize/ambiance", fd);
+      state.hzAmbiance.push({ file: r.file, name: r.name });
+      state.hz.ambiance.file = r.file; state.hz.ambiance.type = "custom";
+      renderHzControls();
+      toast("Ambiance bed added (café / lo-fi etc.).", "ok");
+    } catch(e){ toast(e.message, "err"); }
+  };
+  inp.click();
+}
+$("#hzPresetSeg").addEventListener("click", e => { const b = e.target.closest(".seg-btn"); if(b) applyHzPreset(b.dataset.preset); });
+$("#hzSource").addEventListener("change", e => { state.hzSource = e.target.value; setHzBefore(); });
+
+let hzRunning = false;
+async function hzProcess(){
+  if(hzRunning) return;
+  if(!state.hzSource){ toast("Pick a source clip first.", "err"); return; }
+  hzRunning = true;
+  const btn = $("#hzProcessBtn"); btn.disabled = true;
+  $("#hzWave").classList.add("is-active");
+  $(".bg-label", btn).textContent = "Polishing…";
+  const stage = $("#hzStage"); stage.className = "stage-text run"; stage.textContent = "Queued…";
+  try {
+    const src = state.history.find(h => h.files && (h.files.mp3 || h.files.wav) === state.hzSource);
+    const { job_id } = await api.post("/api/humanize", {
+      source: state.hzSource, params: state.hz,
+      voice: src ? src.voice : "Narration", language: src ? src.language : "" });
+    const res = await pollJob(job_id, j => { stage.textContent = `${j.stage} · ${Math.round((j.progress||0)*100)}%`; });
+    const item = res.item; state.history.unshift(item);
+    const f = item.files.mp3 || item.files.wav;
+    $("#hzAfter").src = "/audio/" + f;
+    const dl = $("#hzDl"); dl.innerHTML = "";
+    Object.entries(item.files).forEach(([kind, name]) => {
+      const a = el("a", "dl-btn", `${icon("i-download")}<span>${kind.toUpperCase()}</span>`);
+      a.href = "/download/" + name; a.download = ""; dl.appendChild(a);
+    });
+    $("#hzResult").hidden = false;
+    $("#hzResult").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    stage.className = "stage-text"; stage.textContent = `Done · ${fmtDur(item.duration)} polished`;
+    toast("Polished — saved to History.", "ok");
+  } catch(e){
+    stage.className = "stage-text err"; stage.textContent = "Error: " + e.message;
+    toast(e.message, "err");
+  } finally {
+    hzRunning = false; btn.disabled = false;
+    $("#hzWave").classList.remove("is-active");
+    $(".bg-label", btn).textContent = "Remove AI fingerprints";
+  }
+}
+$("#hzProcessBtn").addEventListener("click", hzProcess);
+
+function openHumanize(item){
+  state.pendingSource = item.files.mp3 || item.files.wav;
+  showView("humanize");
+}
 
 /* ============================================================
    BOOT
