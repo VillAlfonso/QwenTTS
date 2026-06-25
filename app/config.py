@@ -50,7 +50,7 @@ MODEL_REPOS = {
 # --- defaults --------------------------------------------------------------
 DEFAULT_SETTINGS = {
     "model_size": "1.7B",        # "1.7B" (quality) | "0.6B" (faster, no instruct/design)
-    "device": "cpu",            # "cpu" | "dml" (experimental AMD GPU via DirectML)
+    "device": "cuda",           # "cuda" (NVIDIA GPU, auto-falls back to CPU) | "cpu"
     "default_speaker": "Ryan",
     "default_language": "Auto",
     "output_format": "mp3",      # "mp3" | "wav" | "both"

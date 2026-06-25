@@ -1,7 +1,9 @@
 # Qwen3-TTS Studio dependencies
 #
-# 1) Install CPU PyTorch first (Windows + AMD = CPU build):
-#      pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+# 1) Install CUDA PyTorch first (NVIDIA GPU; RTX 50-series "Blackwell" needs cu128):
+#      pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+#    (CPU-only fallback:
+#      pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu)
 #
 # 2) Install the Qwen3-TTS engine (vendored in ./third_party):
 #      pip install -e ./third_party/Qwen3-TTS
@@ -18,5 +20,5 @@ hf_transfer
 # Pinned engine deps (installed transitively by qwen-tts, listed for clarity):
 # transformers==4.57.3
 # accelerate==1.12.0
-# torch, torchaudio (CPU)
+# torch==2.11.0, torchaudio==2.11.0 (CUDA cu128)
 # librosa, soundfile, numpy

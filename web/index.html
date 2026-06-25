@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css?v=7" />
+<link rel="stylesheet" href="/styles.css?v=8" />
 </head>
 <body>
 
@@ -106,7 +106,7 @@
           <h2 class="row-title">Lines <span class="muted2" id="chunkCount"></span></h2>
           <button class="ghost-btn" id="backToScript">&larr; Back to full script</button>
         </div>
-        <p class="chunk-help">Each line renders separately so you can give it its own tone — type something like <em>sarcastic</em> or <em>excited, fast</em> on any line and re-render just that one. They're stitched into a single file only when you <b>Export</b>.</p>
+        <p class="chunk-help">Each line renders separately so you can give it its own tone — type something like <em>sarcastic</em> or <em>excited, fast</em> on any line and re-render just that one. <b>Render all lines</b> renders everything and <b>saves the finished narration to History</b> automatically. Your lines are kept if you reload.</p>
 
         <div class="chunk-list" id="chunkList"></div>
 
@@ -121,7 +121,7 @@
             </div>
             <div class="stage-text" id="stageText">Idle &middot; ready</div>
           </div>
-          <button class="btn primary big" id="exportBtn">Export file</button>
+          <button class="btn primary big" id="exportBtn" title="Re-stitch &amp; save the current lines to History">Save again</button>
         </div>
 
         <!-- result -->
@@ -258,6 +258,6 @@
 <!-- ===== toast ===== -->
 <div class="toasts" id="toasts"></div>
 
-<script src="/app.js?v=7"></script>
+<script src="/app.js?v=8"></script>
 </body>
 </html>

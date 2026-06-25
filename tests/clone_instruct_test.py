@@ -10,8 +10,10 @@ import torch
 from qwen_tts import Qwen3TTSModel
 
 repo = config.MODEL_REPOS["1.7B"]["base"]
-print("loading", repo, flush=True)
-m = Qwen3TTSModel.from_pretrained(repo, device_map="cpu", dtype=torch.float32,
+device = "cuda:0" if torch.cuda.is_available() else "cpu"
+dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+print("loading", repo, "on", device, flush=True)
+m = Qwen3TTSModel.from_pretrained(repo, device_map=device, dtype=dtype,
                                   attn_implementation=None)
 
 ref = str(config.REFS_DIR / "selftest_ref.wav")

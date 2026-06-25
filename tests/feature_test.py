@@ -16,11 +16,14 @@ from qwen_tts import Qwen3TTSModel
 OUT = config.OUTPUTS_DIR
 REFS = config.REFS_DIR
 
+DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
+DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+
 
 def load(task):
     repo = config.MODEL_REPOS["1.7B"][task]
     return Qwen3TTSModel.from_pretrained(
-        repo, device_map="cpu", dtype=torch.float32, attn_implementation=None)
+        repo, device_map=DEVICE, dtype=DTYPE, attn_implementation=None)
 
 
 def save(wav, sr, name):

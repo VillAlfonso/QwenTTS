@@ -16,12 +16,15 @@ from qwen_tts import Qwen3TTSModel  # noqa: E402
 SIZE = sys.argv[1] if len(sys.argv) > 1 else "0.6B"
 repo = config.MODEL_REPOS[SIZE]["custom_voice"]
 
+device = "cuda:0" if torch.cuda.is_available() else "cpu"
+dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 print(f"[smoke] size={SIZE} repo={repo}", flush=True)
-print(f"[smoke] torch={torch.__version__} threads={torch.get_num_threads()}", flush=True)
+print(f"[smoke] torch={torch.__version__} device={device} dtype={dtype} "
+      f"cuda={torch.cuda.is_available()}", flush=True)
 
 t0 = time.time()
 model = Qwen3TTSModel.from_pretrained(
-    repo, device_map="cpu", dtype=torch.float32, attn_implementation=None)
+    repo, device_map=device, dtype=dtype, attn_implementation=None)
 t1 = time.time()
 print(f"[smoke] load+download: {t1 - t0:.1f}s", flush=True)
 

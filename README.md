@@ -5,7 +5,7 @@ A local, private, **human-sounding** text-to-speech studio built on
 narration. Everything runs **on your own machine**: no API keys, no cloud, no
 per-character billing.
 
-![local](https://img.shields.io/badge/runs-100%25%20local-e6a94b) ![cpu](https://img.shields.io/badge/CPU-friendly-57d2c4)
+![local](https://img.shields.io/badge/runs-100%25%20local-e6a94b) ![gpu](https://img.shields.io/badge/NVIDIA-CUDA-76b900)
 
 ## What it does
 
@@ -22,11 +22,10 @@ per-character billing.
 
 - Windows, Python 3.11+, and [ffmpeg](https://ffmpeg.org/) on `PATH`
   (or at `C:\ffmpeg\ffmpeg.exe`).
+- An **NVIDIA GPU** with the CUDA build of PyTorch (see `requirements.txt`).
+  This machine runs a **GeForce RTX 5060 Ti (16 GB)** on CUDA 12.8 (cu128).
+  No CUDA GPU? It falls back to the CPU automatically — same output, just slower.
 - ~8 GB free disk per model (weights download on first use, into `./models`).
-
-This machine has an **AMD GPU**, and PyTorch's GPU acceleration (ROCm) is
-Linux-only — so synthesis runs on the **CPU** by default. It works well; it's
-just slower than real-time. See *Performance* below.
 
 ## Run it
 
@@ -57,21 +56,24 @@ note 0.6B has no emotion control or voice design.
 
 ## Performance
 
-Synthesis speed is reported as **RTF** (real-time factor): RTF 5× means 1 minute
-of audio takes ~5 minutes to render. On an 8-core CPU expect roughly:
+Synthesis speed is reported as **RTF** (real-time factor): RTF 0.5× means 1
+minute of audio renders in ~30 seconds (lower is better). On a GPU like the
+**RTX 5060 Ti** in bfloat16, synthesis typically runs faster than real time; on
+the **CPU fallback** it's several times *slower* than real time.
 
 - **0.6B**: fastest, good for drafts.
-- **1.7B**: best quality, slower.
+- **1.7B**: best quality.
 
-Render long scripts and grab a coffee — or draft with 0.6B and do the final
-pass with 1.7B. Tune `Max chars / chunk` and pauses in *Settings*.
+Benchmark your own machine with `python tests/smoke.py 1.7B` — it prints the
+load time and the measured RTF. Tune `Max chars / chunk` and pauses in
+*Settings*.
 
 ## How it works
 
 ```
 web/  (vanilla JS SPA)  ──►  FastAPI (app/main.py)
                                ├─ service.py   orchestration + background jobs
-                               ├─ engine.py    qwen_tts model manager (LRU, CPU)
+                               ├─ engine.py    qwen_tts model manager (LRU, CUDA/CPU)
                                ├─ chunking.py  sentence-aware splitting
                                └─ audio.py     ffmpeg stitch + loudnorm + mp3
 third_party/Qwen3-TTS/   the official engine (installed editable)
@@ -83,13 +85,16 @@ data/                    settings, history, custom voices, outputs
 
 - **"SoX could not be found"** — harmless; SoX is only used by an unused codec
   path. Ignore it.
-- **"flash-attn is not installed"** — expected on CPU; it uses the PyTorch path.
+- **"flash-attn is not installed"** — harmless; the model uses PyTorch's
+  built-in SDPA attention. No flash-attn wheel is needed on Windows.
 - **No MP3 / loudness** — install ffmpeg and make sure it's on `PATH`.
-- **Out of memory** — lower *Models in RAM* to 1 in Settings, or use 0.6B.
-- **AMD GPU (DirectML)** — tested and **not viable**: DirectML can't run
-  Qwen3-TTS's token-generation loop (it lacks int64 ops like `gather`/`cat` on
-  token IDs), so synthesis runs on the CPU. The isolated `.venv-dml` created for
-  that experiment can be deleted to reclaim space.
+- **GPU not used / `torch.cuda.is_available()` is False** — you have a CPU-only
+  PyTorch. Reinstall the CUDA build (RTX 50-series "Blackwell" needs cu128):
+  `pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128`
+  The *Settings → Compute device* row and the sidebar chip show what's active.
+- **Out of memory (CUDA out of memory)** — lower *Models in RAM* to 1 in
+  Settings, or switch to 0.6B. The 1.7B set in bfloat16 needs a few GB of VRAM
+  per loaded task model.
 
 ## Credits
 

@@ -85,7 +85,7 @@ $("#nav").addEventListener("click", e => { const b = e.target.closest(".nav-item
 /* ---------- chips ---------- */
 function renderChips(){
   const s = state.status;
-  $("#chipDevice").textContent = (s.device === "dml" ? "GPU · DirectML" : "CPU");
+  $("#chipDevice").textContent = (s.device === "cuda" ? "GPU · CUDA" : "CPU");
   $("#chipModel").textContent = "Qwen3-TTS " + (s.model_size || "1.7B");
   $("#chipFfmpeg").hidden = s.ffmpeg !== false;
 }
@@ -165,12 +165,51 @@ $("#splitBtn").addEventListener("click", () => {
   $("#chunkEditor").hidden = false;
   $("#result").hidden = true;
   renderChunkList();
-  setStageText("Idle · render the lines when you're ready");
+  setStageText("Idle · press Render all lines to render & save");
+  saveSession();
 });
 $("#backToScript").addEventListener("click", () => {
   $("#chunkEditor").hidden = true;
   $("#scriptPanel").hidden = false;
 });
+
+/* ----- session persistence (so a reload never loses rendered lines) ----- */
+const SESSION_KEY = "qwentts_session_v1";
+let _saveT;
+function saveSession(){
+  try {
+    if(!state.chunks || !state.chunks.length){ localStorage.removeItem(SESSION_KEY); return; }
+    localStorage.setItem(SESSION_KEY, JSON.stringify({
+      mode: state.mode, voice: voiceSelect.value, language: languageSelect.value,
+      script: scriptInput.value,
+      chunks: state.chunks.map(c => ({
+        text: c.text, instruct: c.instruct, paragraph: c.paragraph,
+        status: c.status === "rendering" ? "stale" : c.status,
+        file: c.file, duration: c.duration })),
+    }));
+  } catch(e){ /* storage may be unavailable */ }
+}
+function saveSessionSoon(){ clearTimeout(_saveT); _saveT = setTimeout(saveSession, 500); }
+function restoreSession(){
+  try {
+    const d = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
+    if(!d || !d.chunks || !d.chunks.length) return;
+    if(d.script != null) scriptInput.value = d.script;
+    if(d.mode){ state.mode = d.mode; $$("#modeSeg .seg-btn").forEach(x => x.classList.toggle("is-active", x.dataset.mode === d.mode)); populateVoices(); }
+    if(d.voice){ voiceSelect.value = d.voice; updateVoiceHint(); }
+    if(d.language) languageSelect.value = d.language;
+    state.chunks = d.chunks.map((c, i) => ({
+      id: "c" + Date.now() + "_" + i, text: c.text, instruct: c.instruct || "",
+      paragraph: c.paragraph || 0, status: c.status || "empty",
+      file: c.file || null, duration: c.duration || 0 }));
+    $("#scriptPanel").hidden = true;
+    $("#chunkEditor").hidden = false;
+    renderChunkList();
+    updateScriptMeta();
+    const ready = state.chunks.filter(c => c.status === "done").length;
+    setStageText(ready ? `Restored · ${ready}/${state.chunks.length} lines rendered` : "Restored your lines");
+  } catch(e){ /* ignore corrupt session */ }
+}
 
 function renderChunkList(){
   const list = $("#chunkList"); list.innerHTML = "";
@@ -198,12 +237,12 @@ function chunkCard(ch, idx){
   const tone = $(".chunk-tone", card); tone.value = ch.instruct || "";
   const autosize = () => { ta.style.height = "auto"; ta.style.height = (ta.scrollHeight + 2) + "px"; };
   requestAnimationFrame(autosize);
-  ta.addEventListener("input", () => { ch.text = ta.value; markStale(ch, card); autosize(); });
-  tone.addEventListener("input", () => { ch.instruct = tone.value; markStale(ch, card); });
+  ta.addEventListener("input", () => { ch.text = ta.value; markStale(ch, card); autosize(); saveSessionSoon(); });
+  tone.addEventListener("input", () => { ch.instruct = tone.value; markStale(ch, card); saveSessionSoon(); });
   const chips = $(".chunk-chips", card);
   TONE_CHIPS.forEach(t => {
     const c = el("button", "emo-chip", t);
-    c.onclick = () => { tone.value = tone.value.trim() ? tone.value.trim() + ", " + t : t; ch.instruct = tone.value; markStale(ch, card); };
+    c.onclick = () => { tone.value = tone.value.trim() ? tone.value.trim() + ", " + t : t; ch.instruct = tone.value; markStale(ch, card); saveSessionSoon(); };
     chips.appendChild(c);
   });
   $(".chunk-play", card).onclick = () => { if(ch.file) playAux("/audio/" + ch.file); };
@@ -236,6 +275,7 @@ async function renderChunk(idx){
     const res = await pollJob(job_id);
     ch.file = res.file; ch.duration = res.duration; ch.status = "done";
     if(card) updateCardStatus(card, ch);
+    saveSession();
   } catch(e){ ch.status = "error"; if(card) updateCardStatus(card, ch); toast(e.message, "err"); throw e; }
 }
 
@@ -254,7 +294,11 @@ function setStage(j){ setStageText(`${j.stage || "Working"} · ${Math.round((j.p
 async function renderAll(){
   if(running) return;
   const todo = state.chunks.map((c, i) => i).filter(i => state.chunks[i].status !== "done");
-  if(!todo.length){ toast("All lines are already rendered.", "ok"); return; }
+  if(!todo.length){
+    // Everything's already rendered — just (re)save the finished narration.
+    if(state.chunks.some(c => c.status === "done" && c.file)) return exportAll(true);
+    toast("Split a script into lines first.", "err"); return;
+  }
   setRunning(true, "Rendering lines…");
   let done = 0;
   try {
@@ -262,20 +306,22 @@ async function renderAll(){
       setStageText(`Rendering line ${done+1} of ${todo.length}…`, "run");
       await renderChunk(i);
       done++;
+      saveSession();
     }
-    setRunning(false, "All lines ready · press Export to stitch them");
-    toast("All lines rendered.", "ok");
+    setStageText("Saving narration to History…", "run");
+    await exportAll(true);   // auto-stitch + save so finishing = saved
   } catch(e){ setRunning(false, "Stopped: " + e.message, true); }
 }
 $("#renderAllBtn").addEventListener("click", renderAll);
 
-async function exportAll(){
-  if(running) return;
+// auto=true: called automatically after a full render (skip prompts/guards)
+async function exportAll(auto){
+  if(running && !auto) return;
   const done = state.chunks.filter(c => c.status === "done" && c.file);
-  if(!done.length){ toast("Render some lines first.", "err"); return; }
+  if(!done.length){ if(!auto) toast("Render some lines first.", "err"); return; }
   const missing = state.chunks.length - done.length;
-  if(missing > 0 && !confirm(`${missing} line(s) aren't rendered yet. Export the ${done.length} rendered line(s) anyway?`)) return;
-  setRunning(true, "Exporting…");
+  if(!auto && missing > 0 && !confirm(`${missing} line(s) aren't rendered yet. Save the ${done.length} rendered line(s) anyway?`)) return;
+  setRunning(true, "Saving narration…");
   const voice = state.mode === "custom" ? dispName(voiceSelect.value)
     : (state.voices.custom.find(v => v.id === voiceSelect.value)?.name || "Cloned voice");
   const chunks = done.map(c => ({ file: c.file, paragraph: c.paragraph, text: c.text }));
@@ -284,11 +330,12 @@ async function exportAll(){
     const res = await pollJob(job_id, setStage);
     state.history.unshift(res.item);
     showResult(res.item);
-    setRunning(false, `Exported · ${fmtDur(res.item.duration)}`);
-    toast("Exported — saved to History.", "ok");
-  } catch(e){ setRunning(false, "Export failed: " + e.message, true); toast(e.message, "err"); }
+    setRunning(false, `Saved to History · ${fmtDur(res.item.duration)}`);
+    toast(`Narration saved to History (${voice}).`, "ok");
+    saveSession();
+  } catch(e){ setRunning(false, "Save failed: " + e.message, true); toast(e.message, "err"); }
 }
-$("#exportBtn").addEventListener("click", exportAll);
+$("#exportBtn").addEventListener("click", () => exportAll(false));
 
 /* ----- result player ----- */
 const audio = $("#audio");
@@ -589,11 +636,14 @@ async function renderSettings(){
   grid.innerHTML = "";
 
   /* engine */
-  const g1 = el("div", "sgroup", `<h3>Engine</h3><p class="ghint">Bigger model = more natural & expressive, but slower on CPU.</p>`);
+  const g1 = el("div", "sgroup", `<h3>Engine</h3><p class="ghint">Bigger model = more natural & expressive, but uses more VRAM and is slower.</p>`);
   g1.appendChild(row("Model size", "0.6B is faster; 1.7B adds emotion control & voice design",
     seg([["1.7B","1.7B · quality"],["0.6B","0.6B · fast"]], s.model_size, async v => { await patchSettings({model_size:v}); afterSettingsChange(); renderSettings(); })));
-  g1.appendChild(row("Compute device", "AMD GPU (DirectML) was tested but can't run this model's generation loop, so synthesis uses the CPU.",
-    el("span", "", '<span class="dot on"></span>CPU')));
+  const onGpu = (state.status && state.status.device === "cuda");
+  g1.appendChild(row("Compute device", onGpu
+      ? "Synthesis runs on your NVIDIA GPU (CUDA). Falls back to CPU automatically if the GPU is unavailable."
+      : "No CUDA GPU detected — running on CPU. Install the CUDA build of PyTorch (see requirements.txt) to use the GPU.",
+    el("span", "", `<span class="dot ${onGpu ? "on" : "off"}"></span>${onGpu ? "NVIDIA GPU · CUDA" : "CPU"}`)));
   g1.appendChild(row("Models in RAM", "How many task models stay loaded (LRU)",
     numCtl(s.max_loaded_models, v => patchSettings({max_loaded_models:Math.max(1,Math.round(v))}), {min:1,max:3,step:1})));
   grid.appendChild(g1);
@@ -861,6 +911,7 @@ async function boot(){
   renderQuickEmotions();
   updateScriptMeta();
   syncPlayIcon();
+  restoreSession();   // bring back any in-progress chunk editor from a previous reload
   // poll status until torch warms up (so model chips/cached states are fresh)
   if(!state.status.torch_ready) setTimeout(refreshStatus, 4000);
 }

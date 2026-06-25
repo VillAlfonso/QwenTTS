@@ -1,9 +1,10 @@
 """Local Qwen3-TTS inference engine.
 
 Wraps the `qwen_tts` package: lazily loads task checkpoints (CustomVoice /
-VoiceDesign / Base) with LRU eviction, runs synthesis on CPU (or experimental
-DirectML), and caches voice-clone prompts. Torch and qwen_tts are imported
-lazily so the web server starts instantly and import errors surface nicely.
+VoiceDesign / Base) with LRU eviction, runs synthesis on the NVIDIA GPU (CUDA,
+with automatic CPU fallback), and caches voice-clone prompts. Torch and
+qwen_tts are imported lazily so the web server starts instantly and import
+errors surface nicely.
 """
 from __future__ import annotations
 
@@ -37,6 +38,7 @@ class Engine:
         self._torch = None
         self._model_cls = None
         self._import_error: Optional[str] = None
+        self._device_label: Optional[str] = None
 
     # ---- imports ----------------------------------------------------------
     def ensure_imports(self):
@@ -56,17 +58,19 @@ class Engine:
 
     # ---- device / dtype ---------------------------------------------------
     def _resolve_device(self, pref: str):
-        """Return (device_map_value, label). Falls back to CPU."""
-        if pref == "dml":
-            try:
-                import torch_directml
-                return torch_directml.device(), "dml"
-            except Exception:
-                return "cpu", "cpu"
+        """Return (device_map_value, label). Prefers CUDA, falls back to CPU."""
+        if (pref or "").lower() != "cpu" and self._torch is not None \
+                and self._torch.cuda.is_available():
+            return "cuda:0", "cuda"
         return "cpu", "cpu"
 
     def _dtype_attn(self, label: str):
-        # float32 + no flash-attn is the robust, CPU/AMD-safe combination.
+        if label == "cuda":
+            # bfloat16 halves VRAM use and runs at full speed on the RTX GPU;
+            # attn_implementation=None lets transformers pick SDPA (no flash-attn
+            # wheel needed on Windows).
+            return self._torch.bfloat16, None
+        # float32 + default attention is the robust CPU fallback.
         return self._torch.float32, None
 
     # ---- model loading ----------------------------------------------------
@@ -86,7 +90,8 @@ class Engine:
                 return self._models[key]
 
             self.ensure_imports()
-            device_map, label = self._resolve_device(settings.get("device", "cpu"))
+            device_map, label = self._resolve_device(settings.get("device", "cuda"))
+            self._device_label = label
             dtype, attn = self._dtype_attn(label)
             model = self._model_cls.from_pretrained(
                 repos[task], device_map=device_map, dtype=dtype,
@@ -107,6 +112,11 @@ class Engine:
     def _free(self):
         import gc
         gc.collect()
+        try:
+            if self._torch is not None and self._torch.cuda.is_available():
+                self._torch.cuda.empty_cache()
+        except Exception:
+            pass
 
     # ---- generation kwargs ------------------------------------------------
     def _gen_kwargs(self, settings: Dict) -> Dict:
@@ -245,7 +255,10 @@ class Engine:
             for task, repo in repos.items()
         }
         return {
-            "device": settings.get("device", "cpu"),
+            "device": self._device_label or settings.get("device", "cuda"),
+            "cuda_available": (
+                self._torch.cuda.is_available() if self._torch is not None else None
+            ),
             "model_size": size,
             "tasks": tasks,
             "torch_ready": self._torch is not None,

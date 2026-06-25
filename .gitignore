@@ -7,4 +7,3 @@ __pycache__/
 *.pyc
 third_party/Qwen3-TTS/.git/
 .DS_Store
-.venv-dml
